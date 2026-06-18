@@ -107,6 +107,7 @@ import { Stack } from '../ui/Stack'
 export const meta: SlideMeta = {
   title: 'Ma slide',           // titre court affiché dans la grille (g)
   speaker: ['Alice'],          // qui parle — noms définis dans presentation.config.ts
+  duration: 90,                // durée cible (s) : jalons timeline (l) + cadence console/pilote
   notes: 'Notes du présentateur (touche s).',
   // steps: 3,                 // optionnel : nombre de révélations internes (→)
   // annexe: true,             // optionnel : slide de réserve (Q&A)
