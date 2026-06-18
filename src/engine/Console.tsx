@@ -1,7 +1,7 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
 import type { SlideModule } from './types'
-import { DECK_CHANNEL, type DeckMsg, type DeckState } from './deck'
+import { useDeck, elapsedSec } from './sync'
 import { tokens } from '../design/tokens'
 import { config, speakerColor } from '../presentation.config'
 
@@ -53,68 +53,55 @@ function SpeakerTags({ mod }: { mod?: SlideModule }) {
 }
 
 export function Console({ slides }: { slides: SlideModule[] }) {
-  const [st, setSt] = useState<DeckState>({ slideIndex: 0, step: 0, running: true, accumMs: 0, anchor: Date.now() })
-  const [now, setNow] = useState(Date.now())
-  const [pilot, setPilot] = useState<{ pin: string; url: string } | null>(null)
-  const chanRef = useRef<BroadcastChannel | null>(null)
+  const deck = useDeck({ role: 'stage' })
+  const { state } = deck
+  const isAdmin = deck.granted === 'admin'
+  const [, setTick] = useState(0)
+  useEffect(() => { const id = window.setInterval(() => setTick((t) => t + 1), 250); return () => window.clearInterval(id) }, [])
 
-  useEffect(() => {
-    const ch = new BroadcastChannel(DECK_CHANNEL)
-    chanRef.current = ch
-    ch.onmessage = (e: MessageEvent<DeckMsg>) => { if (e.data.kind === 'state') setSt(e.data.state) }
-    ch.postMessage({ kind: 'cmd', cmd: 'hello' } as DeckMsg)
-    return () => ch.close()
-  }, [])
-
-  // WS local (poste de confiance) — juste pour récupérer PIN + URL mobile du serveur
-  useEffect(() => {
-    const wsu = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/sync`
-    let ws: WebSocket; let closed = false
-    const conn = () => {
-      ws = new WebSocket(wsu)
-      ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', role: 'stage' }))
-      ws.onmessage = (e) => { let m: any; try { m = JSON.parse(e.data) } catch { return } if (m?.t === 'ok' && m.pin) setPilot({ pin: m.pin, url: m.url }) }
-      ws.onclose = () => { if (!closed) setTimeout(conn, 2000) }
-    }
-    conn()
-    return () => { closed = true; ws?.close() }
-  }, [])
-  useEffect(() => { const id = window.setInterval(() => setNow(Date.now()), 250); return () => window.clearInterval(id) }, [])
-
-  const send = (m: DeckMsg) => chanRef.current?.postMessage(m)
-  const cmd = (c: 'next' | 'prev' | 'first' | 'last' | 'toggleTimer' | 'resetTimer') => send({ kind: 'cmd', cmd: c })
-  const goto = (i: number) => send({ kind: 'cmd', cmd: 'goto', index: i })
+  // navigation calculée ici (on connaît les steps) puis envoyée en absolu
+  const next = () => {
+    const ts = slides[state.slideIndex]?.meta.steps ?? 0
+    if (state.step < ts) deck.setPos(state.slideIndex, state.step + 1)
+    else if (state.slideIndex < slides.length - 1) deck.setPos(state.slideIndex + 1, 0)
+  }
+  const prev = () => {
+    if (state.step > 0) deck.setPos(state.slideIndex, state.step - 1)
+    else if (state.slideIndex > 0) deck.setPos(state.slideIndex - 1, slides[state.slideIndex - 1]?.meta.steps ?? 0)
+  }
+  const goto = (i: number) => deck.setPos(i, 0)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (['ArrowRight', ' ', 'ArrowDown', 'PageDown'].includes(e.key)) { e.preventDefault(); cmd('next') }
-      else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); cmd('prev') }
-      else if (e.key === 'Home') { cmd('first') } else if (e.key === 'End') { cmd('last') }
-      else if (e.key === 'p') { cmd('toggleTimer') } else if (e.key === 't') { cmd('resetTimer') }
+      if (['ArrowRight', ' ', 'ArrowDown', 'PageDown'].includes(e.key)) { e.preventDefault(); next() }
+      else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); prev() }
+      else if (e.key === 'Home') goto(0)
+      else if (e.key === 'End') goto(slides.length - 1)
+      else if (e.key === 'p') deck.toggleTimer()
+      else if (e.key === 't') deck.resetTimer()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  })
 
-  const cur = slides[st.slideIndex]
-  const nxt = slides[st.slideIndex + 1]
-  const elapsedMs = st.accumMs + (st.running ? now - st.anchor : 0)
-  const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000))
+  const cur = slides[state.slideIndex]
+  const nxt = slides[state.slideIndex + 1]
+  const elapsed = elapsedSec(state, deck.offset())
 
   const durs = slides.map((s) => s.meta.duration ?? 60)
   const total = durs.reduce((a, b) => a + b, 0) || 1
   const starts: number[] = []
   durs.reduce((acc, d, i) => { starts[i] = acc; return acc + d }, 0)
-  const curEnd = (starts[st.slideIndex] ?? 0) + (durs[st.slideIndex] ?? 0)
-  const remaining = curEnd - elapsedSec
+  const curEnd = (starts[state.slideIndex] ?? 0) + (durs[state.slideIndex] ?? 0)
+  const remaining = curEnd - elapsed
   const ok = remaining >= 0
   const status = ok ? OKC : KO
-  const nowFrac = Math.min(1, Math.max(0, elapsedSec / total))
+  const nowFrac = Math.min(1, Math.max(0, elapsed / total))
 
-  // numérotation principale (hors annexe)
   const mainTotal = slides.filter((s) => !s.meta.annexe).length
-  const mainNo = slides.slice(0, st.slideIndex + 1).filter((s) => !s.meta.annexe).length
+  const mainNo = slides.slice(0, state.slideIndex + 1).filter((s) => !s.meta.annexe).length
 
+  const pilotUrl = deck.pilotToken ? `${deck.origin ?? location.origin}/pilote?t=${deck.pilotToken}` : ''
   const btn = { background: PANEL, border: `1px solid ${LINE}`, color: TXT, borderRadius: 8, padding: '8px 14px', fontFamily: MONO, fontSize: 13, cursor: 'pointer' as const }
 
   return (
@@ -124,10 +111,11 @@ export function Console({ slides }: { slides: SlideModule[] }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
           <span style={{ fontFamily: MONO, fontSize: 12, letterSpacing: 2, color: MUT }}>RÉGIE · {config.brand.toUpperCase()}</span>
           <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700 }}>{String(mainNo).padStart(2, '0')} / {String(mainTotal).padStart(2, '0')}</span>
-          {st.step > 0 || (cur?.meta.steps ?? 0) > 0 ? <span style={{ fontFamily: MONO, fontSize: 12, color: MUT }}>étape {st.step}/{cur?.meta.steps ?? 0}</span> : null}
+          {state.step > 0 || (cur?.meta.steps ?? 0) > 0 ? <span style={{ fontFamily: MONO, fontSize: 12, color: MUT }}>étape {state.step}/{cur?.meta.steps ?? 0}</span> : null}
+          {!isAdmin && <span style={{ fontFamily: MONO, fontSize: 11, color: KO }}>lecture seule — déverrouille la scène (h)</span>}
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-          <span style={{ fontFamily: MONO, fontSize: 40, fontWeight: 700, color: st.running ? TXT : MUT }}>{!st.running && '|| '}{fmt(elapsedSec)}</span>
+          <span style={{ fontFamily: MONO, fontSize: 40, fontWeight: 700, color: state.running ? TXT : MUT }}>{!state.running && '|| '}{fmt(elapsed)}</span>
           <span style={{ fontFamily: MONO, fontSize: 13, color: MUT }}>/ {fmt(total)}</span>
           <span style={{ fontFamily: MONO, fontSize: 14, fontWeight: 700, color: status, padding: '4px 10px', borderRadius: 8, background: `${status}1a`, border: `1px solid ${status}55` }}>
             {ok ? `reste ${fmt(remaining)}` : `+${fmt(-remaining)} retard`}
@@ -142,7 +130,7 @@ export function Console({ slides }: { slides: SlideModule[] }) {
             <span style={{ fontFamily: MONO, fontSize: 11, letterSpacing: 1, color: OKC }}>● EN COURS</span>
             <SpeakerTags mod={cur} />
           </div>
-          <Preview mod={cur} step={st.step} width={560} />
+          <Preview mod={cur} step={state.step} width={560} />
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
@@ -170,7 +158,7 @@ export function Console({ slides }: { slides: SlideModule[] }) {
         {slides.map((s, i) => {
           const left = (starts[i] / total) * 100, width = (durs[i] / total) * 100
           const col = s.meta.speaker?.length ? speakerColor(s.meta.speaker[0]) : MUT
-          const isCur = i === st.slideIndex, done = i < st.slideIndex
+          const isCur = i === state.slideIndex, done = i < state.slideIndex
           return (
             <div key={s.id} onClick={() => goto(i)} title={s.meta.title ?? s.id}
               style={{ position: 'absolute', left: `${left}%`, width: `calc(${width}% - 2px)`, top: 0, height: 18, borderRadius: 3, cursor: 'pointer',
@@ -185,22 +173,22 @@ export function Console({ slides }: { slides: SlideModule[] }) {
 
       {/* contrôles */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-        <button style={btn} onClick={() => cmd('prev')}>← Précédent</button>
-        <button style={{ ...btn, background: '#1e2530', fontWeight: 700 }} onClick={() => cmd('next')}>Suivant →</button>
+        <button style={btn} onClick={prev}>← Précédent</button>
+        <button style={{ ...btn, background: '#1e2530', fontWeight: 700 }} onClick={next}>Suivant →</button>
         <span style={{ width: 1, height: 22, background: LINE, margin: '0 4px' }} />
-        <button style={btn} onClick={() => cmd('toggleTimer')}>{st.running ? 'Pause' : 'Reprendre'}</button>
-        <button style={btn} onClick={() => cmd('resetTimer')}>Remettre le chrono</button>
+        <button style={btn} onClick={deck.toggleTimer}>{state.running ? 'Pause' : 'Reprendre'}</button>
+        <button style={btn} onClick={deck.resetTimer}>Remettre le chrono</button>
         <span style={{ flex: 1 }} />
         <span style={{ fontFamily: MONO, fontSize: 11, color: MUT }}>← → naviguer · clic sur un jalon = sauter</span>
       </div>
 
-      {pilot && (
+      {pilotUrl && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '10px 14px', borderRadius: 10, background: PANEL, border: `1px solid ${LINE}` }}>
-          <div style={{ background: '#fff', padding: 6, borderRadius: 6, lineHeight: 0 }}><QRCodeSVG value={`${pilot.url}?pin=${pilot.pin}`} size={66} /></div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: MUT }}>RÉGIE MOBILE — SCANNE POUR PILOTER</span>
-            <span style={{ fontFamily: MONO, fontSize: 13, color: TXT }}>{pilot.url}</span>
-            <span style={{ fontFamily: MONO, fontSize: 13, color: MUT }}>PIN <b style={{ color: TXT }}>{pilot.pin}</b> · pré-rempli dans le QR</span>
+          <div style={{ background: '#fff', padding: 6, borderRadius: 6, lineHeight: 0 }}><QRCodeSVG value={pilotUrl} size={66} /></div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0 }}>
+            <span style={{ fontFamily: MONO, fontSize: 10, letterSpacing: 1, color: OKC }}>RÉGIE MOBILE — SCANNE POUR PILOTER</span>
+            <span style={{ fontFamily: MONO, fontSize: 13, color: TXT, overflowWrap: 'anywhere' }}>{pilotUrl}</span>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: MUT }}>Accès à durée limitée — montre-le aux orateurs.</span>
           </div>
         </div>
       )}

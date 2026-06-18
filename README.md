@@ -8,9 +8,9 @@ Conçu pour démarrer une présentation en moins d'une minute : on clone, on ins
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173
+npm run dev      # http://localhost:5173 (régie incluse, localhost = admin)
 npm run build    # bundle de production dans dist/
-npm run preview  # servir le build (port 4173)
+npm start        # serveur de prod (sert dist/ + régie) sur :3000
 npm run typecheck
 ```
 
@@ -35,40 +35,78 @@ Le bouton `?` de la barre d'outils flottante (visible au survol souris) ouvre le
 
 ## Régie temps réel (console & pilotes mobiles)
 
-Trois routes partagent le même état de navigation en direct :
+**L'état de navigation vit côté serveur** ; tous les écrans ne font que le refléter via un WebSocket unique (`/sync`). Trois routes :
 
 | Route | Rôle |
 |-------|------|
-| `/` | **Scène** — à projeter. C'est l'autorité : elle exécute les commandes et diffuse l'état. |
-| `/console` | **Régie présentateur** sur la même machine (2ᵉ onglet) : aperçu courant + suivant, notes, gros chrono + cadence, timeline cliquable. |
-| `/pilote` | **Régie mobile** : un téléphone sur le même réseau, derrière un PIN. |
+| `/` | **Scène** — à projeter. Suit l'état ; pilote si la session est **admin**. |
+| `/console` | **Régie présentateur** : aperçu courant + suivant, notes, gros chrono + cadence, timeline cliquable, QR. |
+| `/pilote` | **Régie mobile** : un téléphone, via le **token** du QR. |
 
-Synchronisation : `BroadcastChannel` entre `/` et `/console` (même navigateur) ; **WebSocket** (`/sync`) pour les téléphones. La scène rediffuse l'état chaque seconde → tout client en retard converge.
+### Rôles (sécurité côté serveur)
 
-**Brancher un téléphone :** ouvrez `/` puis le panneau d'aide (`h`) — un **QR code** + l'URL (`http://<IP-LAN>:5173/pilote`) + le **PIN** y figurent (aussi affichés sur `/console`). Le QR pré-remplit le PIN. Le PIN se change par variable d'environnement :
+| Rôle | Comment | Droits |
+|------|---------|--------|
+| **viewer** | rien (juste l'URL) | regarde, **ne peut pas** piloter |
+| **pilote** | token du QR (`?t=…`) | pilote (relais auto) |
+| **admin** | mot de passe régie (panneau `h`) | pilote librement + affiche le QR |
+
+### Brancher un téléphone
+
+1. Ouvre `/` (ou `/console`) et le panneau d'aide (`h`).
+2. Tape le **mot de passe régie** → le **QR** se déverrouille (URL + token à durée de vie 12 h).
+3. Les orateurs scannent le QR → ils choisissent leur nom (parmi `speakers`) et pilotent.
+
+**Relais auto** : seul l'orateur de la slide courante peut avancer (« SUIVANT » vert = c'est à toi) ; les autres voient « à toi dans N » et peuvent forcer la main. Une slide sans `speaker` = tout le monde peut avancer. Le chrono est **partagé**.
+
+### Mot de passe
+
+Un seul secret, `PRESENTER_PASSWORD`. **En local il est facultatif** : `localhost` est admin automatiquement (zéro config) et le QR pointe vers ton IP LAN. Pour le changer :
 
 ```bash
-PRESENTER_PIN=1234 npm run dev
+PRESENTER_PASSWORD=monsecret npm run dev
 ```
 
-Sur le pilote, chaque relais choisit son nom (parmi `speakers`). **Relais auto** : seul l'orateur de la slide courante peut avancer (bouton « SUIVANT » vert = « c'est à toi ») ; les autres voient « à toi dans N » et peuvent forcer la main si besoin. Une slide sans `speaker` = « tout le monde » peut avancer. Le chrono (pause / remise à zéro) est **partagé** par toute l'équipe.
+> Réseau : le serveur écoute sur `0.0.0.0`. Si un pare-feu bloque les autres appareils, autorise le port (`sudo ufw allow 5173`).
 
-> Réseau : le serveur dev écoute sur `0.0.0.0` (`server.host`). Si un pare-feu bloque les autres appareils, autorisez le port (`sudo ufw allow 5173`). Les routes `/console` et `/pilote` reposent sur le fallback SPA du serveur dev ; en production, servez `index.html` pour toutes les routes.
+## Déploiement (un serveur, toutes les features)
+
+Le pilotage a besoin d'un process qui relaie : on déploie le **serveur Node** (`server/index.js`), pas un build statique. Il sert `dist/`, fait le fallback SPA (`/console`, `/pilote`) et héberge le hub WS — le même qu'en dev.
+
+```bash
+npm run build      # génère dist/
+PRESENTER_PASSWORD=monsecret npm start   # sert tout sur :3000
+```
+
+### Via Kamal (exemple `config/deploy.yml`)
+
+1. DNS : fais pointer ton sous-domaine (ex. `prez.exemple.fr`) vers le serveur.
+2. Renseigne `image`, `servers`, `proxy.host` dans `config/deploy.yml`.
+3. Définis **le** secret (et celui du registre) dans ton shell — lus par `.kamal/secrets` :
+
+```bash
+export PRESENTER_PASSWORD=monsecret
+export KAMAL_REGISTRY_PASSWORD=…
+kamal setup     # première fois
+kamal deploy    # mises à jour
+```
+
+kamal-proxy gère le TLS (HTTPS/WSS) et l'upgrade WebSocket. La différence local ↔ prod = **un secret + `kamal deploy`** ; toutes les features sont conservées.
 
 ## Architecture
 
 ```
 src/
-├── main.tsx                # Bootstrap React
+├── main.tsx                # Bootstrap + routage (/, /console, /pilote)
 ├── presentation.config.ts  # ★ LE fichier à éditer : marque (brand) + équipe (speakers)
 ├── design/
 │   ├── tokens.ts           # Couleurs, typographie, espacement, motion
-│   └── globals.css         # Reset + variables CSS globales
+│   └── globals.css         # Reset + variables CSS globales (zones de sûreté)
 ├── engine/
-│   ├── Presentation.tsx    # Moteur (scène /) : navigation, layout, transitions, autorité de synchro
+│   ├── Presentation.tsx    # Scène (/) : rend l'état serveur ; pilote si admin
 │   ├── Console.tsx         # Régie présentateur (/console)
-│   ├── MobilePilot.tsx     # Régie mobile (/pilote) — PIN + relais auto
-│   ├── deck.ts             # Protocole de synchro (état + commandes)
+│   ├── MobilePilot.tsx     # Régie mobile (/pilote) — token + relais auto
+│   ├── sync.ts             # Client de synchro unique (WS) : état serveur + commandes
 │   ├── slides.ts           # Auto-découverte des slides — rien à éditer
 │   └── types.ts            # SlideMeta, SlideContext, SlideModule
 ├── ui/                     # Composants réutilisables
@@ -91,6 +129,12 @@ src/
     ├── 01-titre.tsx        # l'ordre = ordre alphabétique du nom de fichier
     ├── 02-points.tsx
     └── …
+
+server/                     # serveur (dev ET prod partagent ce code)
+├── hub.js                  # état canonique + relais WS /sync + rôles
+├── auth.js                 # mot de passe, tokens HMAC (12 h), rate-limit, /unlock
+└── index.js                # serveur de prod : sert dist/ + fallback SPA + hub
+Dockerfile · config/deploy.yml · .env.example   # déploiement (voir plus bas)
 ```
 
 ## Créer une slide

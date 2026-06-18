@@ -1,0 +1,35 @@
+# Déploiement Kamal 2 — exemple à adapter (sous-domaine, registre, serveur).
+# Mise en route :  kamal setup    puis  kamal deploy
+# Mises à jour  :  kamal deploy
+service: slide-engine
+
+# Image — remplace par ton registre (Docker Hub / GHCR).
+image: dreggdwarf/slide-engine
+
+servers:
+  web:
+    - 217.69.13.112        # IP du VPS
+
+# kamal-proxy : TLS automatique (Let's Encrypt) + upgrade WebSocket géré nativement.
+proxy:
+  ssl: true
+  host: prez.robin-borg.dev # ⚠ DNS : ce sous-domaine doit pointer vers le VPS
+  app_port: 3000
+  healthcheck:
+    path: /up
+
+registry:
+  server: ghcr.io
+  username: DrEggdwarf
+  password:
+    - KAMAL_REGISTRY_PASSWORD
+
+builder:
+  arch: amd64
+
+env:
+  clear:
+    NODE_ENV: production
+    PORT: 3000
+  secret:
+    - PRESENTER_PASSWORD   # ← LE seul secret : déverrouille pilotage + QR
