@@ -25,6 +25,7 @@ npm run typecheck
 | `s` | notes du présentateur |
 | `f` | plein écran (démarrer le diaporama) |
 | `b` `.` | écran noir · `w` `,` écran blanc |
+| `l` | timeline — jalons de temps par slide (avancer à l'heure) |
 | `p` | pause / reprise du chrono |
 | `t` | réinitialiser le chrono |
 | `?` `h` | panneau d'aide (liste des raccourcis) |

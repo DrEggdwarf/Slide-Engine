@@ -8,6 +8,7 @@ import { Footer } from '../ui/Footer'
 import { NotesPanel } from '../ui/NotesPanel'
 import { GridView } from '../ui/GridView'
 import { HelpOverlay } from '../ui/HelpOverlay'
+import { Timeline } from '../ui/Timeline'
 import { tokens } from '../design/tokens'
 
 interface PresentationProps {
@@ -22,6 +23,7 @@ export function Presentation({ slides }: PresentationProps) {
   const [showNotes, setShowNotes] = useState(false)
   const [gridOpen, setGridOpen] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
+  const [showTimeline, setShowTimeline] = useState(false)
   const [cover, setCover] = useState<null | 'black' | 'white'>(null)
   const toolbarTimeoutRef = useRef<number | undefined>(undefined)
 
@@ -167,6 +169,9 @@ export function Presentation({ slides }: PresentationProps) {
       } else if (e.key === 'f') {
         e.preventDefault()
         toggleFullscreen()
+      } else if (e.key === 'l') {
+        e.preventDefault()
+        setShowTimeline((v) => !v)
       } else if (e.key === 'p') {
         e.preventDefault()
         toggleTimer()
@@ -246,6 +251,12 @@ export function Presentation({ slides }: PresentationProps) {
 
       <ProgressBar value={progress} />
       <Footer counter={labels[slideIndex]} />
+
+      <AnimatePresence>
+        {showTimeline && !gridOpen && !cover && !showHelp && (
+          <Timeline visible slides={slides} currentIndex={slideIndex} elapsedSec={elapsedSec} />
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>{showNotes && <NotesPanel id={currentSlide.id} meta={currentSlide.meta} key={currentSlide.id} />}</AnimatePresence>
 

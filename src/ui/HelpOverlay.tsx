@@ -10,6 +10,7 @@ const SHORTCUTS: { keys: string[]; action: string }[] = [
   { keys: ['f'], action: 'Plein écran (démarrer le diaporama)' },
   { keys: ['b', '.'], action: 'Écran noir' },
   { keys: ['w', ','], action: 'Écran blanc' },
+  { keys: ['l'], action: 'Timeline — jalons de temps (avancer à l\'heure)' },
   { keys: ['p'], action: 'Pause / reprise du chrono' },
   { keys: ['t'], action: 'Réinitialiser le chrono' },
   { keys: ['?', 'h'], action: 'Afficher / masquer cette aide' },

@@ -15,6 +15,8 @@ export interface SlideMeta {
   speaker?: string[]
   /** Notes du présentateur (touche s) */
   notes?: string
+  /** Durée cible en secondes — place les jalons de la timeline (touche l) */
+  duration?: number
   /** Nombre de révélations internes (→). Absent ou 0 = pas d'étapes */
   steps?: number
   /** true = slide de réserve (Q&A) : hors numérotation et hors progression */

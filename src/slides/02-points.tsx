@@ -7,6 +7,7 @@ import { tokens } from '../design/tokens'
 
 export const meta: SlideMeta = {
   title: 'Points clés',
+  duration: 90,
   speaker: ['Alice'],
   steps: 3, // 3 révélations : → pour faire apparaître chaque point
   notes: 'Révélez chaque point avec →. `step` (0→3) pilote l\'affichage.',
