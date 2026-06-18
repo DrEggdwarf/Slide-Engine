@@ -6,6 +6,7 @@ import { Lede } from '../ui/Lede'
 
 export const meta: SlideMeta = {
   title: 'Titre',
+  duration: 30,
   speaker: ['Alice', 'Bob'],
   notes: "Slide d'ouverture : annoncez le sujet et présentez-vous.",
 }

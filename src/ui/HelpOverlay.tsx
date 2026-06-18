@@ -1,4 +1,5 @@
 import { motion } from 'framer-motion'
+import { QRCodeSVG } from 'qrcode.react'
 import { tokens } from '../design/tokens'
 
 const SHORTCUTS: { keys: string[]; action: string }[] = [
@@ -10,6 +11,7 @@ const SHORTCUTS: { keys: string[]; action: string }[] = [
   { keys: ['f'], action: 'Plein écran (démarrer le diaporama)' },
   { keys: ['b', '.'], action: 'Écran noir' },
   { keys: ['w', ','], action: 'Écran blanc' },
+  { keys: ['l'], action: 'Timeline — jalons de temps (avancer à l\'heure)' },
   { keys: ['p'], action: 'Pause / reprise du chrono' },
   { keys: ['t'], action: 'Réinitialiser le chrono' },
   { keys: ['?', 'h'], action: 'Afficher / masquer cette aide' },
@@ -18,9 +20,10 @@ const SHORTCUTS: { keys: string[]; action: string }[] = [
 
 interface HelpOverlayProps {
   onClose: () => void
+  pilot?: { pin: string; url: string } | null
 }
 
-export function HelpOverlay({ onClose }: HelpOverlayProps) {
+export function HelpOverlay({ onClose, pilot }: HelpOverlayProps) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -108,6 +111,19 @@ export function HelpOverlay({ onClose }: HelpOverlayProps) {
             </div>
           ))}
         </div>
+
+        {pilot && (
+          <div style={{ marginTop: 22, paddingTop: 20, borderTop: `1px solid ${tokens.color.surface.line}`, display: 'flex', alignItems: 'center', gap: 18 }}>
+            <div style={{ background: '#fff', padding: 8, borderRadius: 8, flexShrink: 0, lineHeight: 0 }}>
+              <QRCodeSVG value={`${pilot.url}?pin=${pilot.pin}`} size={104} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+              <span style={{ fontFamily: tokens.type.family.mono, fontSize: tokens.type.size.xs, letterSpacing: tokens.type.tracking.wider, textTransform: 'uppercase', color: tokens.color.text.muted }}>Régie mobile — scanne pour piloter</span>
+              <span style={{ fontFamily: tokens.type.family.mono, fontSize: tokens.type.size.sm, color: tokens.color.text.primary }}>{pilot.url}</span>
+              <span style={{ fontFamily: tokens.type.family.mono, fontSize: tokens.type.size.sm, color: tokens.color.text.secondary }}>PIN <b style={{ color: tokens.color.text.primary }}>{pilot.pin}</b> · pré-rempli dans le QR</span>
+            </div>
+          </div>
+        )}
 
         <div
           style={{
