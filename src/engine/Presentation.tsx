@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { SlideModule } from './types'
-import { DECK_CHANNEL, type DeckMsg, type DeckState } from './deck'
+import { useDeck, elapsedSec, unlock } from './sync'
 import { ProgressBar } from '../ui/ProgressBar'
 import { Toolbar } from '../ui/Toolbar'
 import { Speaker } from '../ui/Speaker'
@@ -17,281 +17,123 @@ interface PresentationProps {
 }
 
 export function Presentation({ slides }: PresentationProps) {
-  const [slideIndex, setSlideIndex] = useState(0)
-  const [step, setStep] = useState(0)
+  // L'état de navigation vient du serveur (useDeck). Cet écran ne fait que le rendre ;
+  // s'il est admin (mot de passe validé, ou localhost en dev) il peut piloter.
+  const deck = useDeck({ role: 'stage' })
+  const { state } = deck
+  const isAdmin = deck.granted === 'admin'
+
   const [direction, setDirection] = useState<1 | -1>(1)
   const [showToolbar, setShowToolbar] = useState(false)
   const [showNotes, setShowNotes] = useState(false)
   const [gridOpen, setGridOpen] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
-  const [pilotInfo, setPilotInfo] = useState<{ pin: string; url: string } | null>(null)
   const [cover, setCover] = useState<null | 'black' | 'white'>(null)
+  const [, setTick] = useState(0) // force le rafraîchissement du chrono
   const toolbarTimeoutRef = useRef<number | undefined>(undefined)
 
-  // Chrono : pausable (p) et réinitialisable (t)
-  const [now, setNow] = useState(Date.now())
-  const [anchor, setAnchor] = useState(Date.now())
-  const [accumMs, setAccumMs] = useState(0)
-  const [running, setRunning] = useState(true)
-
-  const currentSlide = slides[slideIndex]
+  const currentSlide = slides[state.slideIndex]
   const totalSteps = currentSlide?.meta.steps ?? 0
 
-  // Numérotation : slides principales comptées 01..N, annexes étiquetées A1..An
+  // Numérotation : slides principales 01..N, annexes A1..An
   const { labels, mainCount, mainPosition } = useMemo(() => {
-    let main = 0
-    let annexe = 0
+    let main = 0, annexe = 0
     const labels: string[] = []
     const mainPosition: number[] = []
     for (const s of slides) {
-      if (s.meta.annexe) {
-        annexe += 1
-        labels.push(`Annexe A${annexe}`)
-        mainPosition.push(-1)
-      } else {
-        main += 1
-        labels.push(`${String(main).padStart(2, '0')} / ${'{TOTAL}'}`)
-        mainPosition.push(main)
-      }
+      if (s.meta.annexe) { annexe += 1; labels.push(`Annexe A${annexe}`); mainPosition.push(-1) }
+      else { main += 1; labels.push(`${String(main).padStart(2, '0')} / ${'{TOTAL}'}`); mainPosition.push(main) }
     }
-    return {
-      labels: labels.map((l) => l.replace('{TOTAL}', String(main).padStart(2, '0'))),
-      mainCount: main,
-      mainPosition,
-    }
+    return { labels: labels.map((l) => l.replace('{TOTAL}', String(main).padStart(2, '0'))), mainCount: main, mainPosition }
   }, [slides])
 
+  useEffect(() => { const id = window.setInterval(() => setTick((t) => t + 1), 500); return () => window.clearInterval(id) }, [])
+
+  // Sens d'animation déduit du changement d'index serveur
+  const prevIndexRef = useRef(state.slideIndex)
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 500)
-    return () => window.clearInterval(id)
-  }, [])
-
-  const next = useCallback(() => {
-    if (step < totalSteps) {
-      setStep((s) => s + 1)
-      return
+    if (state.slideIndex !== prevIndexRef.current) {
+      setDirection(state.slideIndex > prevIndexRef.current ? 1 : -1)
+      prevIndexRef.current = state.slideIndex
     }
-    if (slideIndex < slides.length - 1) {
-      setDirection(1)
-      setSlideIndex((i) => i + 1)
-      setStep(0)
-    }
-  }, [step, totalSteps, slideIndex, slides.length])
+  }, [state.slideIndex])
 
-  const prev = useCallback(() => {
-    if (step > 0) {
-      setStep((s) => s - 1)
-      return
-    }
-    if (slideIndex > 0) {
-      setDirection(-1)
-      setSlideIndex((i) => i - 1)
-      setStep(slides[slideIndex - 1]?.meta.steps ?? 0)
-    }
-  }, [step, slideIndex, slides])
+  // Navigation : on calcule la cible ici (on connaît les `steps`) puis on l'envoie en absolu.
+  const next = () => {
+    const ts = slides[state.slideIndex]?.meta.steps ?? 0
+    if (state.step < ts) deck.setPos(state.slideIndex, state.step + 1)
+    else if (state.slideIndex < slides.length - 1) deck.setPos(state.slideIndex + 1, 0)
+  }
+  const prev = () => {
+    if (state.step > 0) deck.setPos(state.slideIndex, state.step - 1)
+    else if (state.slideIndex > 0) deck.setPos(state.slideIndex - 1, slides[state.slideIndex - 1]?.meta.steps ?? 0)
+  }
+  const goToSlide = (idx: number) => { if (idx >= 0 && idx < slides.length) deck.setPos(idx, 0) }
 
-  const goToSlide = useCallback(
-    (idx: number) => {
-      if (idx < 0 || idx >= slides.length) return
-      setDirection(idx > slideIndex ? 1 : -1)
-      setSlideIndex(idx)
-      setStep(0)
-    },
-    [slideIndex, slides.length]
-  )
-
-  const resetTimer = useCallback(() => {
-    setAccumMs(0)
-    setAnchor(Date.now())
-    setRunning(true)
-  }, [])
-
-  const toggleTimer = useCallback(() => {
-    if (running) {
-      setAccumMs((a) => a + (Date.now() - anchor))
-      setRunning(false)
-    } else {
-      setAnchor(Date.now())
-      setRunning(true)
-    }
-  }, [running, anchor])
-
-  const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen?.()
-    } else {
-      document.exitFullscreen?.()
-    }
-  }, [])
-
-  // ── Synchronisation régie (/console même navigateur) + pilotes (/pilote réseau) ──
-  // La scène est l'autorité : elle exécute les commandes et diffuse l'état.
-  const chanRef = useRef<BroadcastChannel | null>(null)
-  const wsRef = useRef<WebSocket | null>(null)
-  const stateRef = useRef<DeckState>({ slideIndex, step, running, accumMs, anchor })
-  stateRef.current = { slideIndex, step, running, accumMs, anchor }
-  const execRef = useRef<(m: DeckMsg) => void>(() => {})
-  execRef.current = (m: DeckMsg) => {
-    if (m.kind !== 'cmd') return
-    switch (m.cmd) {
-      case 'next': next(); break
-      case 'prev': prev(); break
-      case 'first': goToSlide(0); break
-      case 'last': goToSlide(slides.length - 1); break
-      case 'goto': goToSlide(m.index); break
-      case 'toggleTimer': toggleTimer(); break
-      case 'resetTimer': resetTimer(); break
-      case 'hello': {
-        const s = { kind: 'state', state: stateRef.current } as DeckMsg
-        chanRef.current?.postMessage(s)
-        if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify(s))
-        break
-      }
-    }
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) document.documentElement.requestFullscreen?.()
+    else document.exitFullscreen?.()
   }
 
+  const onUnlock = async (password: string) => {
+    const r = await unlock(password)
+    if (r.ok) deck.reconnect() // recharge la session WS → reconnue admin (cookie) + token pilote
+    return r
+  }
+
+  // Clavier : handler stable qui lit toujours l'état courant via une ref
+  const onKeyRef = useRef<(e: KeyboardEvent) => void>(() => {})
+  onKeyRef.current = (e: KeyboardEvent) => {
+    if (showHelp) { if (['Escape', '?', 'h'].includes(e.key)) { e.preventDefault(); setShowHelp(false) } return }
+    if (cover) { if (['b', '.', 'w', ',', 'Escape'].includes(e.key)) { e.preventDefault(); setCover(null) } return }
+    if (gridOpen) { if (['Escape', 'g'].includes(e.key)) { e.preventDefault(); setGridOpen(false) } return }
+
+    // Bascules d'affichage — disponibles pour tous
+    if (e.key === 's') { e.preventDefault(); setShowNotes((v) => !v); return }
+    if (e.key === 'g') { e.preventDefault(); setGridOpen(true); return }
+    if (e.key === 'f') { e.preventDefault(); toggleFullscreen(); return }
+    if (e.key === 'l') { e.preventDefault(); setShowTimeline((v) => !v); return }
+    if (e.key === 'b' || e.key === '.') { e.preventDefault(); setCover('black'); return }
+    if (e.key === 'w' || e.key === ',') { e.preventDefault(); setCover('white'); return }
+    if (e.key === '?' || e.key === 'h') { e.preventDefault(); setShowHelp(true); return }
+
+    // Pilotage — réservé à l'admin (le serveur rejette de toute façon les autres)
+    if (!isAdmin) return
+    if (['ArrowRight', 'ArrowDown', ' ', 'PageDown'].includes(e.key)) { e.preventDefault(); next() }
+    else if (['ArrowLeft', 'ArrowUp', 'PageUp'].includes(e.key)) { e.preventDefault(); prev() }
+    else if (e.key === 'Home') { e.preventDefault(); goToSlide(0) }
+    else if (e.key === 'End') { e.preventDefault(); goToSlide(slides.length - 1) }
+    else if (e.key === 'p') { e.preventDefault(); deck.toggleTimer() }
+    else if (e.key === 't') { e.preventDefault(); deck.resetTimer() }
+  }
   useEffect(() => {
-    const ch = new BroadcastChannel(DECK_CHANNEL)
-    chanRef.current = ch
-    ch.onmessage = (e: MessageEvent<DeckMsg>) => execRef.current(e.data)
-    return () => ch.close()
+    const h = (e: KeyboardEvent) => onKeyRef.current(e)
+    window.addEventListener('keydown', h)
+    return () => window.removeEventListener('keydown', h)
   }, [])
-
-  // Pont WebSocket (pilotes mobiles via /pilote) — la scène = autorité, reconnexion auto
-  useEffect(() => {
-    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/sync`
-    let ws: WebSocket
-    let closed = false
-    const connect = () => {
-      ws = new WebSocket(url)
-      wsRef.current = ws
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ t: 'hello', role: 'stage' }))
-        ws.send(JSON.stringify({ kind: 'state', state: stateRef.current }))
-      }
-      ws.onmessage = (e) => {
-        let m: any
-        try { m = JSON.parse(e.data) } catch { return }
-        if (m?.kind === 'cmd') execRef.current(m as DeckMsg)
-        else if (m?.t === 'ok' && m.pin) setPilotInfo({ pin: m.pin, url: m.url })
-      }
-      ws.onclose = () => { if (!closed) setTimeout(connect, 1500) }
-    }
-    connect()
-    return () => { closed = true; ws?.close() }
-  }, [])
-
-  // Diffuse l'état — sur changement + heartbeat 1s (tout client en retard converge)
-  useEffect(() => {
-    const push = () => {
-      const msg = { kind: 'state', state: stateRef.current } as DeckMsg
-      chanRef.current?.postMessage(msg)
-      if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify(msg))
-    }
-    push()
-    const id = window.setInterval(push, 1000)
-    return () => window.clearInterval(id)
-  }, [slideIndex, step, running, accumMs, anchor])
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Panneaux modaux : capturent les touches en priorité
-      if (showHelp) {
-        if (e.key === 'Escape' || e.key === '?' || e.key === 'h') {
-          e.preventDefault()
-          setShowHelp(false)
-        }
-        return
-      }
-      if (cover) {
-        if (['b', '.', 'w', ',', 'Escape'].includes(e.key)) {
-          e.preventDefault()
-          setCover(null)
-        }
-        return
-      }
-      if (gridOpen) {
-        if (e.key === 'Escape' || e.key === 'g') {
-          e.preventDefault()
-          setGridOpen(false)
-        }
-        return
-      }
-
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === ' ' || e.key === 'PageDown') {
-        e.preventDefault()
-        next()
-      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
-        e.preventDefault()
-        prev()
-      } else if (e.key === 'Home') {
-        e.preventDefault()
-        goToSlide(0)
-      } else if (e.key === 'End') {
-        e.preventDefault()
-        goToSlide(slides.length - 1)
-      } else if (e.key === 's') {
-        e.preventDefault()
-        setShowNotes((v) => !v)
-      } else if (e.key === 'g') {
-        e.preventDefault()
-        setGridOpen(true)
-      } else if (e.key === 'f') {
-        e.preventDefault()
-        toggleFullscreen()
-      } else if (e.key === 'l') {
-        e.preventDefault()
-        setShowTimeline((v) => !v)
-      } else if (e.key === 'p') {
-        e.preventDefault()
-        toggleTimer()
-      } else if (e.key === 't') {
-        e.preventDefault()
-        resetTimer()
-      } else if (e.key === 'b' || e.key === '.') {
-        e.preventDefault()
-        setCover('black')
-      } else if (e.key === 'w' || e.key === ',') {
-        e.preventDefault()
-        setCover('white')
-      } else if (e.key === '?' || e.key === 'h') {
-        e.preventDefault()
-        setShowHelp(true)
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [next, prev, goToSlide, slides.length, gridOpen, showHelp, cover, toggleFullscreen, toggleTimer, resetTimer])
 
   useEffect(() => {
     const onMove = () => {
       setShowToolbar(true)
       window.clearTimeout(toolbarTimeoutRef.current)
-      toolbarTimeoutRef.current = window.setTimeout(() => {
-        setShowToolbar(false)
-      }, 2500)
+      toolbarTimeoutRef.current = window.setTimeout(() => setShowToolbar(false), 2500)
     }
     window.addEventListener('mousemove', onMove)
-    return () => {
-      window.removeEventListener('mousemove', onMove)
-      window.clearTimeout(toolbarTimeoutRef.current)
-    }
+    return () => { window.removeEventListener('mousemove', onMove); window.clearTimeout(toolbarTimeoutRef.current) }
   }, [])
 
-  const elapsedMs = accumMs + (running ? now - anchor : 0)
-  const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000))
-  const minutes = Math.floor(elapsedSec / 60)
-  const seconds = elapsedSec % 60
-  const elapsedLabel = `${running ? '' : '⏸ '}${minutes}:${seconds.toString().padStart(2, '0')}`
+  const elapsed = elapsedSec(state, deck.offset())
+  const elapsedLabel = `${state.running ? '' : '⏸ '}${Math.floor(elapsed / 60)}:${(elapsed % 60).toString().padStart(2, '0')}`
 
   const progress = useMemo(() => {
-    const pos = mainPosition[slideIndex]
+    const pos = mainPosition[state.slideIndex]
     if (pos === -1) return 100
-    const slideProgress = totalSteps > 0 ? step / totalSteps : 0
+    const slideProgress = totalSteps > 0 ? state.step / totalSteps : 0
     return Math.min(100, ((pos - 1 + slideProgress) / mainCount) * 100)
-  }, [slideIndex, step, totalSteps, mainPosition, mainCount])
+  }, [state.slideIndex, state.step, totalSteps, mainPosition, mainCount])
 
+  if (!currentSlide) return null
   const Component = currentSlide.Component
 
   return (
@@ -302,30 +144,21 @@ export function Presentation({ slides }: PresentationProps) {
           initial={{ opacity: 0, x: direction * 24 }}
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: direction * -24 }}
-          transition={{
-            duration: tokens.motion.duration.base,
-            ease: tokens.motion.ease.inOut,
-          }}
+          transition={{ duration: tokens.motion.duration.base, ease: tokens.motion.ease.inOut }}
           className="slide-canvas"
         >
-          <Component
-            step={step}
-            totalSteps={totalSteps}
-            isActive
-            next={next}
-            prev={prev}
-          />
+          <Component step={state.step} totalSteps={totalSteps} isActive next={next} prev={prev} />
         </motion.div>
       </AnimatePresence>
 
       {currentSlide.meta.speaker?.length ? <Speaker who={currentSlide.meta.speaker} /> : null}
 
       <ProgressBar value={progress} />
-      <Footer counter={labels[slideIndex]} />
+      <Footer counter={labels[state.slideIndex]} />
 
       <AnimatePresence>
         {showTimeline && !gridOpen && !cover && !showHelp && (
-          <Timeline visible slides={slides} currentIndex={slideIndex} elapsedSec={elapsedSec} />
+          <Timeline visible slides={slides} currentIndex={state.slideIndex} elapsedSec={elapsed} />
         )}
       </AnimatePresence>
 
@@ -333,52 +166,36 @@ export function Presentation({ slides }: PresentationProps) {
 
       <AnimatePresence>
         {gridOpen && (
-          <GridView
-            slides={slides}
-            labels={labels}
-            currentIndex={slideIndex}
-            onSelect={(i) => {
-              goToSlide(i)
-              setGridOpen(false)
-            }}
-          />
+          <GridView slides={slides} labels={labels} currentIndex={state.slideIndex}
+            onSelect={(i) => { goToSlide(i); setGridOpen(false) }} />
         )}
       </AnimatePresence>
 
       <Toolbar
         visible={showToolbar && !gridOpen && !cover && !showHelp}
-        slideIndex={slideIndex}
+        slideIndex={state.slideIndex}
         slideCount={slides.length}
-        step={step}
+        step={state.step}
         totalSteps={totalSteps}
         elapsed={elapsedLabel}
         onPrev={prev}
         onNext={next}
-        canPrev={slideIndex > 0 || step > 0}
-        canNext={slideIndex < slides.length - 1 || step < totalSteps}
+        canPrev={state.slideIndex > 0 || state.step > 0}
+        canNext={state.slideIndex < slides.length - 1 || state.step < totalSteps}
         onHelp={() => setShowHelp(true)}
       />
 
       <AnimatePresence>
         {cover && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: tokens.motion.duration.fast }}
-            onClick={() => setCover(null)}
-            style={{
-              position: 'fixed',
-              inset: 0,
-              background: cover === 'black' ? '#000' : '#fff',
-              zIndex: 400,
-              cursor: 'none',
-            }}
-          />
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            transition={{ duration: tokens.motion.duration.fast }} onClick={() => setCover(null)}
+            style={{ position: 'fixed', inset: 0, background: cover === 'black' ? '#000' : '#fff', zIndex: 400, cursor: 'none' }} />
         )}
       </AnimatePresence>
 
-      <AnimatePresence>{showHelp && <HelpOverlay onClose={() => setShowHelp(false)} pilot={pilotInfo} />}</AnimatePresence>
+      <AnimatePresence>
+        {showHelp && <HelpOverlay onClose={() => setShowHelp(false)} unlocked={isAdmin} pilotToken={deck.pilotToken} origin={deck.origin} onUnlock={onUnlock} />}
+      </AnimatePresence>
     </div>
   )
 }
