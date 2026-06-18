@@ -54,6 +54,11 @@ button {
   position: relative;
   overflow: hidden;
   background: #ffffff;
+  /* Zones de sûreté : le contenu centré ne chevauche jamais l'orateur (haut)
+     ni le footer / la progression / la timeline (bas). --safe-bottom est piloté
+     par le moteur (plus grand quand la timeline est visible). */
+  padding-top: var(--safe-top, 56px);
+  padding-bottom: var(--safe-bottom, 48px);
 }
 
 .slide-canvas {

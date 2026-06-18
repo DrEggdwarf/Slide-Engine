@@ -33,6 +33,28 @@ npm run typecheck
 
 Le bouton `?` de la barre d'outils flottante (visible au survol souris) ouvre le même panneau d'aide.
 
+## Régie temps réel (console & pilotes mobiles)
+
+Trois routes partagent le même état de navigation en direct :
+
+| Route | Rôle |
+|-------|------|
+| `/` | **Scène** — à projeter. C'est l'autorité : elle exécute les commandes et diffuse l'état. |
+| `/console` | **Régie présentateur** sur la même machine (2ᵉ onglet) : aperçu courant + suivant, notes, gros chrono + cadence, timeline cliquable. |
+| `/pilote` | **Régie mobile** : un téléphone sur le même réseau, derrière un PIN. |
+
+Synchronisation : `BroadcastChannel` entre `/` et `/console` (même navigateur) ; **WebSocket** (`/sync`) pour les téléphones. La scène rediffuse l'état chaque seconde → tout client en retard converge.
+
+**Brancher un téléphone :** ouvrez `/` puis le panneau d'aide (`h`) — un **QR code** + l'URL (`http://<IP-LAN>:5173/pilote`) + le **PIN** y figurent (aussi affichés sur `/console`). Le QR pré-remplit le PIN. Le PIN se change par variable d'environnement :
+
+```bash
+PRESENTER_PIN=1234 npm run dev
+```
+
+Sur le pilote, chaque relais choisit son nom (parmi `speakers`). **Relais auto** : seul l'orateur de la slide courante peut avancer (bouton « SUIVANT » vert = « c'est à toi ») ; les autres voient « à toi dans N » et peuvent forcer la main si besoin. Une slide sans `speaker` = « tout le monde » peut avancer. Le chrono (pause / remise à zéro) est **partagé** par toute l'équipe.
+
+> Réseau : le serveur dev écoute sur `0.0.0.0` (`server.host`). Si un pare-feu bloque les autres appareils, autorisez le port (`sudo ufw allow 5173`). Les routes `/console` et `/pilote` reposent sur le fallback SPA du serveur dev ; en production, servez `index.html` pour toutes les routes.
+
 ## Architecture
 
 ```
@@ -43,7 +65,10 @@ src/
 │   ├── tokens.ts           # Couleurs, typographie, espacement, motion
 │   └── globals.css         # Reset + variables CSS globales
 ├── engine/
-│   ├── Presentation.tsx    # Moteur : navigation, layout, transitions
+│   ├── Presentation.tsx    # Moteur (scène /) : navigation, layout, transitions, autorité de synchro
+│   ├── Console.tsx         # Régie présentateur (/console)
+│   ├── MobilePilot.tsx     # Régie mobile (/pilote) — PIN + relais auto
+│   ├── deck.ts             # Protocole de synchro (état + commandes)
 │   ├── slides.ts           # Auto-découverte des slides — rien à éditer
 │   └── types.ts            # SlideMeta, SlideContext, SlideModule
 ├── ui/                     # Composants réutilisables
@@ -58,6 +83,7 @@ src/
 │   ├── Reveal.tsx          # Apparition pas à pas
 │   ├── Rule.tsx            # Trait de séparation
 │   ├── Speaker.tsx         # Pastilles « qui parle »
+│   ├── Timeline.tsx        # Timeline de répétition (touche l)
 │   ├── Stack.tsx           # Layout flex column/row avec gap
 │   ├── Stat.tsx            # Chiffre clé en grand
 │   └── Toolbar.tsx         # Barre d'outils flottante

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { SlideModule } from './types'
+import { DECK_CHANNEL, type DeckMsg, type DeckState } from './deck'
 import { ProgressBar } from '../ui/ProgressBar'
 import { Toolbar } from '../ui/Toolbar'
 import { Speaker } from '../ui/Speaker'
@@ -24,6 +25,7 @@ export function Presentation({ slides }: PresentationProps) {
   const [gridOpen, setGridOpen] = useState(false)
   const [showHelp, setShowHelp] = useState(false)
   const [showTimeline, setShowTimeline] = useState(false)
+  const [pilotInfo, setPilotInfo] = useState<{ pin: string; url: string } | null>(null)
   const [cover, setCover] = useState<null | 'black' | 'white'>(null)
   const toolbarTimeoutRef = useRef<number | undefined>(undefined)
 
@@ -122,6 +124,75 @@ export function Presentation({ slides }: PresentationProps) {
       document.exitFullscreen?.()
     }
   }, [])
+
+  // ── Synchronisation régie (/console même navigateur) + pilotes (/pilote réseau) ──
+  // La scène est l'autorité : elle exécute les commandes et diffuse l'état.
+  const chanRef = useRef<BroadcastChannel | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
+  const stateRef = useRef<DeckState>({ slideIndex, step, running, accumMs, anchor })
+  stateRef.current = { slideIndex, step, running, accumMs, anchor }
+  const execRef = useRef<(m: DeckMsg) => void>(() => {})
+  execRef.current = (m: DeckMsg) => {
+    if (m.kind !== 'cmd') return
+    switch (m.cmd) {
+      case 'next': next(); break
+      case 'prev': prev(); break
+      case 'first': goToSlide(0); break
+      case 'last': goToSlide(slides.length - 1); break
+      case 'goto': goToSlide(m.index); break
+      case 'toggleTimer': toggleTimer(); break
+      case 'resetTimer': resetTimer(); break
+      case 'hello': {
+        const s = { kind: 'state', state: stateRef.current } as DeckMsg
+        chanRef.current?.postMessage(s)
+        if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify(s))
+        break
+      }
+    }
+  }
+
+  useEffect(() => {
+    const ch = new BroadcastChannel(DECK_CHANNEL)
+    chanRef.current = ch
+    ch.onmessage = (e: MessageEvent<DeckMsg>) => execRef.current(e.data)
+    return () => ch.close()
+  }, [])
+
+  // Pont WebSocket (pilotes mobiles via /pilote) — la scène = autorité, reconnexion auto
+  useEffect(() => {
+    const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/sync`
+    let ws: WebSocket
+    let closed = false
+    const connect = () => {
+      ws = new WebSocket(url)
+      wsRef.current = ws
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ t: 'hello', role: 'stage' }))
+        ws.send(JSON.stringify({ kind: 'state', state: stateRef.current }))
+      }
+      ws.onmessage = (e) => {
+        let m: any
+        try { m = JSON.parse(e.data) } catch { return }
+        if (m?.kind === 'cmd') execRef.current(m as DeckMsg)
+        else if (m?.t === 'ok' && m.pin) setPilotInfo({ pin: m.pin, url: m.url })
+      }
+      ws.onclose = () => { if (!closed) setTimeout(connect, 1500) }
+    }
+    connect()
+    return () => { closed = true; ws?.close() }
+  }, [])
+
+  // Diffuse l'état — sur changement + heartbeat 1s (tout client en retard converge)
+  useEffect(() => {
+    const push = () => {
+      const msg = { kind: 'state', state: stateRef.current } as DeckMsg
+      chanRef.current?.postMessage(msg)
+      if (wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify(msg))
+    }
+    push()
+    const id = window.setInterval(push, 1000)
+    return () => window.clearInterval(id)
+  }, [slideIndex, step, running, accumMs, anchor])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -224,7 +295,7 @@ export function Presentation({ slides }: PresentationProps) {
   const Component = currentSlide.Component
 
   return (
-    <div className="slide-stage">
+    <div className="slide-stage" style={{ ['--safe-bottom' as never]: showTimeline ? '92px' : '48px' }}>
       <AnimatePresence mode="wait" initial={false}>
         <motion.div
           key={currentSlide.id}
@@ -307,7 +378,7 @@ export function Presentation({ slides }: PresentationProps) {
         )}
       </AnimatePresence>
 
-      <AnimatePresence>{showHelp && <HelpOverlay onClose={() => setShowHelp(false)} />}</AnimatePresence>
+      <AnimatePresence>{showHelp && <HelpOverlay onClose={() => setShowHelp(false)} pilot={pilotInfo} />}</AnimatePresence>
     </div>
   )
 }
