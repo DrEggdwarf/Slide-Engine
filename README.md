@@ -6,13 +6,27 @@ Conçu pour démarrer une présentation en moins d'une minute : on clone, on ins
 
 ## Démarrer
 
+**Tout en une commande** (clone, installe, lance) :
+
 ```bash
-npm install
-npm run dev      # http://localhost:5173 (régie incluse, localhost = admin)
-npm run build    # bundle de production dans dist/
-npm start        # serveur de prod (sert dist/ + régie) sur :3000
-npm run typecheck
+git clone https://github.com/DrEggdwarf/Slide-Engine.git && cd Slide-Engine && npm install && npm run dev
 ```
+
+→ ouvre **http://localhost:5173** : régie incluse, `localhost` est admin automatiquement (rien à taper).
+
+> ⚠️ `npm run dev` est un **serveur qui tourne en continu** : ne le chaîne pas avec `npm run build`/`npm start` (le `&&` resterait bloqué et la suite ne s'exécuterait jamais). On lance **un seul** serveur à la fois.
+
+Les commandes, séparément :
+
+```bash
+npm run dev                       # serveur de dev sur :5173 (régie + localhost admin)
+npm run password -- "monsecret"   # définit le mot de passe régie (écrit .env, non versionné)
+npm run build                     # bundle de production → dist/
+npm start                         # serveur de prod (sert dist/ + régie) sur :3000
+npm run typecheck                 # vérification TypeScript
+```
+
+En local le mot de passe est **facultatif** (localhost est déjà admin). Définis-le avec `npm run password` (persistant) ou ponctuellement en préfixe : `PRESENTER_PASSWORD=monsecret npm run dev`.
 
 ## Navigation
 
@@ -61,10 +75,11 @@ Le bouton `?` de la barre d'outils flottante (visible au survol souris) ouvre le
 
 ### Mot de passe
 
-Un seul secret, `PRESENTER_PASSWORD`. **En local il est facultatif** : `localhost` est admin automatiquement (zéro config) et le QR pointe vers ton IP LAN. Pour le changer :
+Un seul secret, `PRESENTER_PASSWORD`. **En local il est facultatif** : `localhost` est admin automatiquement (zéro config) et le QR pointe vers ton IP LAN. Pour le définir (persistant, écrit `.env` non versionné) :
 
 ```bash
-PRESENTER_PASSWORD=monsecret npm run dev
+npm run password -- "monsecret"
+# ou ponctuellement :  PRESENTER_PASSWORD=monsecret npm run dev
 ```
 
 > Réseau : le serveur écoute sur `0.0.0.0`. Si un pare-feu bloque les autres appareils, autorise le port (`sudo ufw allow 5173`).

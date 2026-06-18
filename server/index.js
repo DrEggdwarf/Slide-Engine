@@ -10,6 +10,7 @@
 //  Aucune dépendance web lourde : http natif + le module `ws`.
 //  Démarrage : PRESENTER_PASSWORD=… node server/index.js
 // ─────────────────────────────────────────────────────────────────────────
+import './env.js' // charge .env AVANT tout (notamment avant auth.js)
 import http from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize } from 'node:path'

@@ -11,6 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "start": "node server/index.js",
+    "password": "node server/set-password.js",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

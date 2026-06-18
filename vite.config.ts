@@ -1,3 +1,4 @@
+import './server/env.js' // charge .env AVANT auth.js (mot de passe régie)
 import { defineConfig, type PluginOption } from 'vite'
 import react from '@vitejs/plugin-react'
 import { attachHub } from './server/hub.js'
